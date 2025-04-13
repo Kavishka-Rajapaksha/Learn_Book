@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import axios from "axios";
+import axiosInstance from "../utils/axios";
 
 function Post({ post, onPostDeleted, onPostUpdated }) {
   const [showMenu, setShowMenu] = useState(false);
@@ -9,76 +9,81 @@ function Post({ post, onPostDeleted, onPostUpdated }) {
   const [editPreviewUrls, setEditPreviewUrls] = useState([]);
   const [deleting, setDeleting] = useState(false);
   const [updating, setUpdating] = useState(false);
-  const [videoError, setVideoError] = useState(false);
-  const [videoLoaded, setVideoLoaded] = useState(false);
-  const [retryCount, setRetryCount] = useState(0);
-  const maxRetries = 3;
+  const [mediaUrls, setMediaUrls] = useState({});
   const user = JSON.parse(localStorage.getItem("user"));
 
   const formatDate = (dateString) => {
     return new Date(dateString).toLocaleString();
   };
 
-  // Helper function to check if a URL is a video
-  const isVideoUrl = (url) => {
-    return (
-      url && (url.includes("/api/media/") || url.includes("/api/uploads/"))
-    );
-  };
-
-  // Fix for video URLs that might be relative
+  // Construct full URL for relative paths
   const getFullUrl = (url) => {
     if (!url) return "";
-
-    // If the URL already includes http/https, return it as is
-    if (url.startsWith("http://") || url.startsWith("https://")) {
-      return url;
-    }
-
-    // Otherwise, prepend the backend server URL
-    return `http://localhost:8080${url}`;
+    if (url.startsWith("http://") || url.startsWith("https://")) return url;
+    return `${window.location.protocol}//${window.location.hostname}:8081${url}`;
   };
 
-  // Log the post data for debugging
-  useEffect(() => {
-    if (post.videoUrl) {
-      console.log("Video URL:", post.videoUrl);
-      console.log("Full Video URL:", getFullUrl(post.videoUrl));
+  // Fetch media as a blob and create object URL
+  const getMediaUrl = async (mediaId, originalUrl) => {
+    try {
+      const response = await axiosInstance.get(`/api/media/${mediaId}`, {
+        responseType: "blob",
+      });
+      if (response.data instanceof Blob) {
+        return URL.createObjectURL(response.data);
+      }
+      console.warn(`Invalid blob for media ${mediaId}, using fallback URL`);
+      return getFullUrl(originalUrl);
+    } catch (error) {
+      console.error(`Error loading media ${mediaId}:`, error);
+      return getFullUrl(originalUrl); // Fallback to original URL
     }
-  }, [post.videoUrl]);
+  };
 
+  // Load all media URLs
   useEffect(() => {
-    if (videoError && retryCount < maxRetries) {
-      const timer = setTimeout(() => {
-        console.log(
-          `Retrying video load attempt ${retryCount + 1}/${maxRetries}`
-        );
-        setVideoError(false);
-        setRetryCount(retryCount + 1);
-      }, 1000); // Wait 1 second before retry
-      return () => clearTimeout(timer);
-    }
-  }, [videoError, retryCount]);
+    const newMediaUrls = {};
+    const loadMedia = async () => {
+
+      // Handle video
+      if (post.videoUrl) {
+        const mediaId = post.videoUrl.split("/").pop();
+        newMediaUrls.video = await getMediaUrl(mediaId, post.videoUrl);
+      }
+
+      // Handle images
+      if (post.imageUrls?.length) {
+        const imagePromises = post.imageUrls.map(async (url) => {
+          const mediaId = url.split("/").pop();
+          const mediaUrl = await getMediaUrl(mediaId, url);
+          return { mediaId, mediaUrl };
+        });
+        const resolvedImages = await Promise.all(imagePromises);
+        resolvedImages.forEach(({ mediaId, mediaUrl }) => {
+          newMediaUrls[mediaId] = mediaUrl;
+        });
+      }
+
+      setMediaUrls(newMediaUrls);
+    };
+
+    loadMedia();
+
+    // Cleanup object URLs
+    return () => {
+      Object.values(newMediaUrls).forEach((url) => {
+        if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+      });
+    };
+  }, [post.videoUrl, post.imageUrls]);
 
   const handleDelete = async () => {
-    if (!window.confirm("Are you sure you want to delete this post?")) {
-      return;
-    }
+    if (!window.confirm("Are you sure you want to delete this post?")) return;
 
     try {
       setDeleting(true);
-      await axios.delete(
-        `http://localhost:8080/api/posts/${post.id}?userId=${user.id}`,
-        {
-          headers: {
-            "Content-Type": "application/json",
-          },
-        }
-      );
-
-      if (onPostDeleted) {
-        onPostDeleted(post.id);
-      }
+      await axiosInstance.delete(`/api/posts/${post.id}?userId=${user.id}`);
+      onPostDeleted?.(post.id);
       setShowMenu(false);
     } catch (error) {
       console.error("Error deleting post:", error);
@@ -114,26 +119,18 @@ function Post({ post, onPostDeleted, onPostUpdated }) {
       formData.append("content", editContent);
       editImages.forEach((image) => formData.append("images", image));
 
-      const response = await axios.put(
-        `http://localhost:8080/api/posts/${post.id}`,
-        formData,
-        {
-          headers: {
-            "Content-Type": "multipart/form-data",
-          },
-        }
-      );
+      const response = await axiosInstance.put(`/api/posts/${post.id}`, formData, {
+        headers: { "Content-Type": "multipart/form-data" },
+      });
 
-      if (onPostUpdated) {
-        onPostUpdated(response.data);
-      }
+      onPostUpdated?.(response.data);
       setIsEditing(false);
 
       // Clean up preview URLs
       editPreviewUrls.forEach((url) => URL.revokeObjectURL(url));
     } catch (error) {
       console.error("Error updating post:", error);
-      alert("Failed to update post. Please try again.");
+      alert(error.response?.data || "Failed to update post. Please try again.");
     } finally {
       setUpdating(false);
     }
@@ -162,7 +159,6 @@ function Post({ post, onPostDeleted, onPostUpdated }) {
               />
             </svg>
           </button>
-
           {showMenu && (
             <div className="absolute right-0 mt-2 w-48 bg-white rounded-md shadow-lg z-50">
               <button
@@ -214,7 +210,6 @@ function Post({ post, onPostDeleted, onPostUpdated }) {
             onChange={(e) => setEditContent(e.target.value)}
             disabled={updating}
           />
-
           {editPreviewUrls.length > 0 && (
             <div className="mb-4 flex flex-wrap gap-2">
               {editPreviewUrls.map((url, index) => (
@@ -227,7 +222,6 @@ function Post({ post, onPostDeleted, onPostUpdated }) {
               ))}
             </div>
           )}
-
           <div className="flex justify-between items-center">
             <input
               type="file"
@@ -244,7 +238,6 @@ function Post({ post, onPostDeleted, onPostUpdated }) {
             >
               Add Images
             </label>
-
             <div className="space-x-2">
               <button
                 type="button"
@@ -274,73 +267,37 @@ function Post({ post, onPostDeleted, onPostUpdated }) {
         <>
           <p className="mb-4">{post.content}</p>
 
-          {/* Display video if available */}
           {post.videoUrl && (
             <div className="mb-4">
-              {videoError ? (
-                <div className="bg-gray-100 p-4 rounded text-center">
-                  <p className="text-red-500">
-                    Video could not be loaded.{" "}
-                    {retryCount < maxRetries
-                      ? `Retrying (${retryCount}/${maxRetries})...`
-                      : ""}
-                  </p>
-                  {retryCount >= maxRetries && (
-                    <div className="mt-2">
-                      <button
-                        onClick={() => {
-                          setVideoError(false);
-                          setRetryCount(0);
-                        }}
-                        className="px-4 py-1 bg-blue-500 text-white rounded hover:bg-blue-600 mr-2"
-                      >
-                        Try again
-                      </button>
-                      <button
-                        onClick={() =>
-                          window.open(getFullUrl(post.videoUrl), "_blank")
-                        }
-                        className="px-4 py-1 bg-gray-500 text-white rounded hover:bg-gray-600"
-                      >
-                        Open in new tab
-                      </button>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <video
-                  key={`${post.id}-video-${retryCount}`}
-                  src={getFullUrl(post.videoUrl)}
-                  className="max-h-96 w-full object-contain"
-                  controls
-                  preload="metadata"
-                  onLoadedData={() => {
-                    setVideoLoaded(true);
-                    console.log("Video loaded successfully:", post.videoUrl);
-                  }}
-                  onError={(e) => {
-                    console.error("Video loading error:", e);
-                    console.error(
-                      "Failed video URL:",
-                      getFullUrl(post.videoUrl)
-                    );
-                    e.target.onerror = null;
-                    setVideoError(true);
-                  }}
-                />
-              )}
+              <video
+                src={mediaUrls.video || getFullUrl(post.videoUrl)}
+                className="max-h-96 w-full object-contain"
+                controls
+                playsInline
+                preload="metadata"
+                onError={(e) => {
+                  console.error("Video loading error:", e);
+                  e.target.src = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjMwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjBmMGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzY2NiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPlZpZGVvIEZhaWxlZCB0byBMb2FkPC90ZXh0Pjwvc3ZnPg==";
+                }}
+              />
             </div>
           )}
 
-          {/* Display images if available */}
-          {post.imageUrls?.map((url, index) => (
-            <img
-              key={index}
-              src={getFullUrl(url)}
-              alt={`Post image ${index + 1}`}
-              className="max-h-96 object-contain mb-4 w-full"
-            />
-          ))}
+          {post.imageUrls?.map((url, index) => {
+            const mediaId = url.split("/").pop();
+            return (
+              <img
+                key={index}
+                src={mediaUrls[mediaId] || getFullUrl(url)}
+                alt={`Post image ${index + 1}`}
+                className="max-h-96 object-contain mb-4 w-full"
+                onError={(e) => {
+                  console.error("Image failed to load:", url);
+                  e.target.src = "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjMwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iMTAwJSIgaGVpZ2h0PSIxMDAlIiBmaWxsPSIjZjBmMGYwIi8+PHRleHQgeD0iNTAlIiB5PSI1MCUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzY2NiIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZHk9Ii4zZW0iPkltYWdlIEZhaWxlZCB0byBMb2FkPC90ZXh0Pjwvc3ZnPg==";
+                }}
+              />
+            );
+          })}
 
           <div className="flex items-center space-x-6 border-t pt-4">
             <button className="flex items-center space-x-2 text-gray-500 hover:text-red-500">
@@ -359,7 +316,6 @@ function Post({ post, onPostDeleted, onPostUpdated }) {
               </svg>
               <span>{post.likes}</span>
             </button>
-
             <button className="flex items-center space-x-2 text-gray-500 hover:text-blue-500">
               <svg
                 className="w-6 h-6"
@@ -376,7 +332,6 @@ function Post({ post, onPostDeleted, onPostUpdated }) {
               </svg>
               <span>{post.comments?.length || 0}</span>
             </button>
-
             <button className="flex items-center space-x-2 text-gray-500 hover:text-green-500">
               <svg
                 className="w-6 h-6"

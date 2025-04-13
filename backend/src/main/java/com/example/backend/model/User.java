@@ -1,12 +1,14 @@
 package com.example.backend.model;
 
-import org.springframework.data.annotation.Id;
-import org.springframework.data.mongodb.core.mapping.Document;
-import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.userdetails.UserDetails;
-
 import java.util.Collection;
 import java.util.Collections;
+
+import org.springframework.data.annotation.Id;
+import org.springframework.data.annotation.Transient;
+import org.springframework.data.mongodb.core.mapping.Document;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
 
 @Document(collection = "users")
 public class User implements UserDetails {
@@ -19,6 +21,10 @@ public class User implements UserDetails {
     private String profilePicture;
     private String bio;
     private boolean enabled = true;
+    private String role = "ROLE_USER";  // Add this field
+
+    @Transient
+    private String rawPassword;
 
     // Getters and Setters
     public String getId() {
@@ -73,10 +79,26 @@ public class User implements UserDetails {
         this.bio = bio;
     }
 
+    public String getRole() {
+        return role;
+    }
+
+    public void setRole(String role) {
+        this.role = role;
+    }
+
+    public String getRawPassword() {
+        return rawPassword;
+    }
+
+    public void setRawPassword(String rawPassword) {
+        this.rawPassword = rawPassword;
+    }
+
     // UserDetails implementation
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
-        return Collections.emptyList();
+        return Collections.singletonList(new SimpleGrantedAuthority(role));
     }
 
     @Override

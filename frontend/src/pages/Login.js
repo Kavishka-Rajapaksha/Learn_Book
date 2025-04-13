@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { Box, Button, TextField, Typography, Paper } from "@mui/material";
 import { useNavigate } from "react-router-dom";
-import axios from "axios";
+import axiosInstance from "../utils/axios";
 
 function Login() {
   const navigate = useNavigate();
@@ -21,14 +21,12 @@ function Login() {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      const response = await axios.post(
-        "http://localhost:8080/api/auth/login",
-        formData
-      );
+      const response = await axiosInstance.post("/api/auth/login", formData);
       localStorage.setItem("user", JSON.stringify(response.data));
       navigate("/");
     } catch (err) {
-      setError(err.response?.data || "An error occurred");
+      const errorMessage = err.response?.data?.message || err.response?.data || "An error occurred";
+      setError(typeof errorMessage === 'object' ? JSON.stringify(errorMessage) : errorMessage);
     }
   };
 

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from "react";
 import axiosInstance from "../utils/axios";
+import { useNavigate } from "react-router-dom"; // Add this import
 
 function CreatePost({ onPostCreated }) {
   const [content, setContent] = useState("");
@@ -10,13 +11,27 @@ function CreatePost({ onPostCreated }) {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const navigate = useNavigate();
 
   const handleImageChange = (e) => {
     const files = Array.from(e.target.files);
-    setImages(files);
-    const urls = files.map((file) => URL.createObjectURL(file));
-    setPreviewUrls(urls);
-    setError("");
+    if (files.length > 0) {
+      // Validate images
+      const validImages = files.every(file => file.type.startsWith('image/'));
+      if (!validImages) {
+        setError("Please upload only image files");
+        return;
+      }
+      
+      setImages(files);
+      // Create and store preview URLs
+      const urls = files.map(file => URL.createObjectURL(file));
+      setPreviewUrls(urls);
+      setError("");
+      // Clear video if any
+      setVideo(null);
+      setVideoPreviewUrl("");
+    }
   };
 
   const handleVideoChange = (e) => {
@@ -78,31 +93,25 @@ function CreatePost({ onPostCreated }) {
     setProgress(0);
     setIsLoading(true);
 
-    const formData = new FormData();
     const user = JSON.parse(localStorage.getItem("user"));
 
     if (!user || !user.id) {
-      setError("Please log in to create a post");
-      setIsLoading(false);
+      navigate("/login");
       return;
     }
 
-    formData.append("userId", user.id);
-    formData.append("content", content);
-
-    if (video) {
-      formData.append("video", video);
-      console.log("Adding video to post:", video.name, video.size, video.type);
-    } else if (images.length > 0) {
-      images.forEach((image) => formData.append("images", image));
-      console.log("Adding images to post:", images.length);
-    }
-
     try {
-      const response = await axiosInstance.post("/api/posts", formData, {
-        headers: {
-          "Content-Type": "multipart/form-data",
-        },
+      const formData = new FormData();
+      formData.append("userId", user.id);
+      formData.append("content", content);
+
+      if (video) {
+        formData.append("video", video);
+      } else if (images.length > 0) {
+        images.forEach((image) => formData.append("images", image));
+      }
+
+      const response = await axiosInstance.uploadMedia("/api/posts", formData, {
         onUploadProgress: (progressEvent) => {
           const percentCompleted = Math.round(
             (progressEvent.loaded * 100) / progressEvent.total
@@ -111,7 +120,9 @@ function CreatePost({ onPostCreated }) {
         },
       });
 
-      console.log("Post created successfully:", response.data);
+      // Clean up preview URLs before resetting state
+      previewUrls.forEach(url => URL.revokeObjectURL(url));
+      if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl);
 
       // Reset form
       setContent("");
@@ -125,22 +136,20 @@ function CreatePost({ onPostCreated }) {
         onPostCreated(response.data);
       }
 
-      // Clean up preview URLs
-      previewUrls.forEach((url) => URL.revokeObjectURL(url));
-      if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl);
-
       // Show success message
       alert("Post created successfully!");
     } catch (error) {
       console.error("Error creating post:", error);
-      let errorMessage = "Failed to create post. Please try again.";
-
-      if (error.response) {
-        console.log("Error response:", error.response);
-        errorMessage = error.response.data || errorMessage;
+      if (error.code === "ECONNABORTED") {
+        setError("Upload timed out. Please try again with a smaller file or check your connection.");
+      } else if (error.response?.status === 403) {
+        setError("Not authorized. Please log in again.");
+        localStorage.removeItem("user");  
+        navigate("/login");
+      } else {
+        const errorMessage = error.response?.data?.message || error.response?.data || "Failed to create post. Please try again.";
+        setError(typeof errorMessage === 'object' ? JSON.stringify(errorMessage) : errorMessage);
       }
-
-      setError(errorMessage);
     } finally {
       setIsLoading(false);
     }

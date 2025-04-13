@@ -26,7 +26,8 @@ function Register() {
       await axios.post("http://localhost:8080/api/auth/register", formData);
       navigate("/login");
     } catch (err) {
-      setError(err.response?.data || "An error occurred");
+      const errorMessage = err.response?.data?.message || err.response?.data || "An error occurred";
+      setError(typeof errorMessage === 'object' ? JSON.stringify(errorMessage) : errorMessage);
     }
   };
 
