@@ -1,26 +1,38 @@
 package com.example.backend.controller;
 
-import com.example.backend.model.PostResponse;
-import com.example.backend.service.PostService;
-import com.mongodb.client.gridfs.GridFSDownloadStream;
-import com.mongodb.client.gridfs.GridFSBucket;
+import java.io.ByteArrayOutputStream;
+import java.util.List;
+import java.util.logging.Logger;
+
 import org.bson.types.ObjectId;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
+import org.springframework.http.CacheControl;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
+import org.springframework.web.bind.annotation.CrossOrigin;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.util.List;
-import java.util.logging.Logger;
+import com.example.backend.model.PostResponse;
+import com.example.backend.service.PostService;
+import com.mongodb.client.gridfs.GridFSBucket;
+import com.mongodb.client.gridfs.GridFSDownloadStream;
+import com.mongodb.client.gridfs.model.GridFSFile;
 
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = "http://localhost:3000")
+@CrossOrigin(origins = {"http://localhost:3000", "http://localhost:3001"})
 public class PostController {
     private static final Logger logger = Logger.getLogger(PostController.class.getName());
     private final PostService postService;
@@ -103,70 +115,95 @@ public class PostController {
     public ResponseEntity<Resource> getMedia(@PathVariable String mediaId) {
         try {
             logger.info("Fetching media with ID: " + mediaId);
+            
+            // Validate ObjectId format
+            if (!ObjectId.isValid(mediaId)) {
+                logger.warning("Invalid media ID format: " + mediaId);
+                return ResponseEntity.badRequest().build();
+            }
+            
             ObjectId objectId = new ObjectId(mediaId);
-
-            // Check if file exists before opening stream
-            if (gridFSBucket.find(new org.bson.Document("_id", objectId)).first() == null) {
+            GridFSFile file = gridFSBucket.find(new org.bson.Document("_id", objectId)).first();
+            
+            if (file == null) {
                 logger.warning("Media not found with ID: " + mediaId);
                 return ResponseEntity.notFound().build();
             }
 
-            GridFSDownloadStream downloadStream = gridFSBucket.openDownloadStream(objectId);
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            byte[] buffer = new byte[4096]; // Increased buffer size
-            int bytesRead;
-
-            while ((bytesRead = downloadStream.read(buffer)) != -1) {
-                outputStream.write(buffer, 0, bytesRead);
-            }
-
-            // Get metadata from the grid fs file
-            org.bson.Document metadata = downloadStream.getGridFSFile().getMetadata();
-            String filename = downloadStream.getGridFSFile().getFilename();
-            downloadStream.close();
-            byte[] data = outputStream.toByteArray();
-
-            // Get content type from metadata
-            String contentType = null;
-            try {
-                if (metadata != null) {
-                    contentType = metadata.getString("contentType");
+            try (GridFSDownloadStream downloadStream = gridFSBucket.openDownloadStream(objectId);
+                 ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+                
+                byte[] buffer = new byte[8192];
+                int bytesRead;
+                while ((bytesRead = downloadStream.read(buffer)) != -1) {
+                    outputStream.write(buffer, 0, bytesRead);
                 }
-            } catch (Exception e) {
-                logger.warning("Failed to get content type: " + e.getMessage());
-            }
+                byte[] data = outputStream.toByteArray();
 
-            if (contentType == null) {
-                // Try to determine content type from filename
-                if (filename != null && (filename.endsWith(".mp4") || filename.contains("mp4"))) {
-                    contentType = "video/mp4";
-                } else if (filename != null && (filename.endsWith(".mov") || filename.contains("quicktime"))) {
-                    contentType = "video/quicktime";
-                } else if (filename != null && (filename.endsWith(".jpg") || filename.endsWith(".jpeg"))) {
-                    contentType = "image/jpeg";
-                } else if (filename != null && filename.endsWith(".png")) {
-                    contentType = "image/png";
-                } else {
-                    contentType = "application/octet-stream";
-                }
-            }
-
-            logger.info("Serving media: " + mediaId + " with content type: " + contentType);
-
-            // Don't set Access-Control-Allow-Origin here to avoid duplicate headers
-            return ResponseEntity.ok()
-                    .contentType(MediaType.parseMediaType(contentType))
-                    .contentLength(data.length)
-                    .header("Content-Disposition", "inline; filename=\"" + filename + "\"")
-                    .header("Accept-Ranges", "bytes")
+                String contentType = determineContentType(file.getFilename(), file.getMetadata());
+                
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.parseMediaType(contentType));
+                headers.setContentLength(data.length);
+                headers.setCacheControl(CacheControl.noCache().getHeaderValue());
+                headers.setPragma("no-cache");
+                headers.setExpires(0L);
+                headers.set(HttpHeaders.ACCEPT_RANGES, "bytes");
+                
+                return ResponseEntity
+                    .status(HttpStatus.OK)
+                    .headers(headers)
                     .body(new ByteArrayResource(data));
+            }
         } catch (IllegalArgumentException e) {
-            logger.warning("Invalid media ID format: " + mediaId);
-            return ResponseEntity.badRequest().body(null);
+            logger.warning("Invalid media ID: " + e.getMessage());
+            return ResponseEntity.badRequest().build();
         } catch (Exception e) {
-            logger.severe("Error retrieving media " + mediaId + ": " + e.getMessage());
+            logger.severe("Error retrieving media: " + e.getMessage());
             e.printStackTrace();
-            return ResponseEntity.status(500).body(null);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
+    }
+
+    private String determineContentType(String filename, org.bson.Document metadata) {
+        // Try to get from metadata first
+        if (metadata != null && metadata.containsKey("contentType")) {
+            return metadata.getString("contentType");
+        }
+        
+        if (metadata != null && metadata.getString("type") != null) {
+            switch (metadata.getString("type")) {
+                case "image":
+                    return "image/jpeg";
+                case "video":
+                    return "video/mp4";
+            }
+        }
+
+        // Fallback to filename extension
+        if (filename != null) {
+            filename = filename.toLowerCase();
+            if (filename.endsWith(".jpg") || filename.endsWith(".jpeg")) {
+                return "image/jpeg";
+            }
+            if (filename.endsWith(".png")) {
+                return "image/png";
+            }
+            if (filename.endsWith(".mp4")) {
+                return "video/mp4";
+            }
+            if (filename.endsWith(".mov")) {
+                return "video/quicktime";
+            }
+            if (filename.endsWith(".gif")) {
+                return "image/gif";
+            }
+            if (filename.endsWith(".webp")) {
+                return "image/webp";
+            }
+        }
+
+        // Default fallback
+        return "application/octet-stream";
     }
 }

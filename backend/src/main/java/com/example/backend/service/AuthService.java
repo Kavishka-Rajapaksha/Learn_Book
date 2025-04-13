@@ -1,9 +1,10 @@
 package com.example.backend.service;
 
-import com.example.backend.model.User;
-import com.example.backend.repository.UserRepository;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
+
+import com.example.backend.model.User;
+import com.example.backend.repository.UserRepository;
 
 @Service
 public class AuthService {
@@ -31,6 +32,8 @@ public class AuthService {
             throw new RuntimeException("Invalid password");
         }
 
+        // Add raw password for auth
+        user.setRawPassword(password);
         return user;
     }
 }
