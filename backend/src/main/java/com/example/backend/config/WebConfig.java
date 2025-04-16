@@ -42,12 +42,12 @@ public class WebConfig implements WebMvcConfigurer {
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/**")
-                .allowedOrigins("http://localhost:3000", "http://localhost:3001")
+                .allowedOrigins("http://localhost:3000", "http://localhost:3001", "http://localhost:3002")
                 .allowedMethods("GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD")
                 .allowedHeaders("*")
-                .exposedHeaders(HttpHeaders.CONTENT_DISPOSITION, HttpHeaders.CONTENT_LENGTH, 
-                              HttpHeaders.CONTENT_RANGE, HttpHeaders.ACCEPT_RANGES, 
-                              HttpHeaders.CONTENT_TYPE)
+                .exposedHeaders(HttpHeaders.CONTENT_DISPOSITION, HttpHeaders.CONTENT_LENGTH,
+                        HttpHeaders.CONTENT_RANGE, HttpHeaders.ACCEPT_RANGES,
+                        HttpHeaders.CONTENT_TYPE)
                 .allowCredentials(true)
                 .maxAge(3600);
     }

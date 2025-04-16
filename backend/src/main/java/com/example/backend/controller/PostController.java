@@ -37,7 +37,7 @@ import com.mongodb.client.gridfs.model.GridFSFile;
 
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = { "http://localhost:3000", "http://localhost:3001" })
+@CrossOrigin(origins = { "http://localhost:3000", "http://localhost:3001", "http://localhost:3002" }) // Add port 3002
 public class PostController {
     private static final Logger logger = Logger.getLogger(PostController.class.getName());
     private final PostService postService;

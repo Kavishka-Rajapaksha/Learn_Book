@@ -12,7 +12,7 @@ import com.example.backend.service.AuthService;
 
 @RestController
 @RequestMapping("/api/auth")
-@CrossOrigin(origins = {"http://localhost:3000", "http://localhost:3001"})
+@CrossOrigin(origins = { "http://localhost:3000", "http://localhost:3001", "http://localhost:3002" }) // Add port 3002
 public class AuthController {
     private final AuthService authService;
 
