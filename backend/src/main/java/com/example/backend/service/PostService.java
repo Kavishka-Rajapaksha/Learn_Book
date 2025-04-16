@@ -10,11 +10,16 @@ import com.mongodb.client.gridfs.GridFSBuckets;
 import com.mongodb.client.gridfs.model.GridFSUploadOptions;
 import org.bson.types.ObjectId;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,6 +36,9 @@ public class PostService {
     private static final int MAX_VIDEO_SIZE_MB = 15; // 15MB
     private static final List<String> ALLOWED_VIDEO_TYPES = List.of("video/mp4", "video/quicktime");
     private static final int MAX_VIDEO_DURATION_SECONDS = 30;
+
+    @Value("${upload.directory}")
+    private String uploadDirectory;
 
     @Autowired
     public PostService(
@@ -70,12 +78,22 @@ public class PostService {
         List<String> mediaIds = new ArrayList<>();
 
         try {
+            // Ensure upload directory exists - use direct path to backenduploads
+            Path uploadsPath = Paths.get("backend", "uploads");
+            if (!Files.exists(uploadsPath)) {
+                Files.createDirectories(uploadsPath);
+                System.out.println("Created uploads directory at: " + uploadsPath.toAbsolutePath());
+            }
+
             // Handle video upload
             if (video != null && !video.isEmpty()) {
                 validateVideo(video);
                 String videoId = saveMedia(video, "video");
                 mediaIds.add(videoId);
                 post.setVideoUrl("/api/media/" + videoId); // URL for retrieval
+
+                // Save to local storage
+                saveToLocalStorage(video, videoId);
             }
 
             // Handle image uploads
@@ -86,6 +104,9 @@ public class PostService {
                     }
                     String imageId = saveMedia(image, "image");
                     mediaIds.add(imageId);
+
+                    // Save to local storage
+                    saveToLocalStorage(image, imageId);
                 }
                 post.setImageUrls(mediaIds.stream()
                         .map(id -> "/api/media/" + id)
@@ -97,6 +118,19 @@ public class PostService {
             return convertToPostResponse(savedPost);
         } catch (IOException e) {
             throw new RuntimeException("Failed to save media: " + e.getMessage());
+        }
+    }
+
+    private void saveToLocalStorage(MultipartFile file, String mediaId) throws IOException {
+        // Use direct absolute path to D:\Learn_Book\backend uploads folder
+        Path uploadsPath = Paths.get("D:", "Learn_Book", "backend", "uploads");
+        Files.createDirectories(uploadsPath); // Ensure directory exists
+
+        Path filePath = uploadsPath.resolve(mediaId);
+        System.out.println("Saving file to: " + filePath);
+
+        try (FileOutputStream fos = new FileOutputStream(filePath.toFile())) {
+            fos.write(file.getBytes());
         }
     }
 
@@ -145,13 +179,21 @@ public class PostService {
             throw new IllegalArgumentException("You can only delete your own posts");
         }
 
-        // Delete associated media from GridFS
+        // Delete associated media from GridFS and local storage
         if (post.getMediaIds() != null) {
             for (String mediaId : post.getMediaIds()) {
                 try {
+                    // Delete from GridFS
                     gridFSBucket.delete(new ObjectId(mediaId));
+
+                    // Delete from local storage - use absolute path
+                    Path mediaPath = Paths.get("D:", "Learn_Book", "backend", "uploads", mediaId);
+                    if (Files.exists(mediaPath)) {
+                        Files.delete(mediaPath);
+                        System.out.println("Deleted file: " + mediaPath);
+                    }
                 } catch (Exception e) {
-                    System.err.println("Failed to delete media: " + mediaId);
+                    System.err.println("Failed to delete media: " + mediaId + " - " + e.getMessage());
                 }
             }
         }
@@ -176,9 +218,17 @@ public class PostService {
                 if (!mediaIds.isEmpty()) {
                     for (String mediaId : mediaIds) {
                         try {
+                            // Delete from GridFS
                             gridFSBucket.delete(new ObjectId(mediaId));
+
+                            // Delete from local storage - use absolute path
+                            Path mediaPath = Paths.get("D:", "Learn_Book", "backend", "uploads", mediaId);
+                            if (Files.exists(mediaPath)) {
+                                Files.delete(mediaPath);
+                                System.out.println("Deleted file during update: " + mediaPath);
+                            }
                         } catch (Exception e) {
-                            System.err.println("Failed to delete old media: " + mediaId);
+                            System.err.println("Failed to delete old media: " + mediaId + " - " + e.getMessage());
                         }
                     }
                     mediaIds.clear();
@@ -191,6 +241,9 @@ public class PostService {
                     }
                     String imageId = saveMedia(image, "image");
                     mediaIds.add(imageId);
+
+                    // Save to local storage
+                    saveToLocalStorage(image, imageId);
                 }
                 post.setImageUrls(mediaIds.stream()
                         .map(id -> "/api/media/" + id)

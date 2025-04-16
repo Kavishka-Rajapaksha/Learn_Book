@@ -1,11 +1,16 @@
 package com.example.backend.controller;
 
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.logging.Logger;
 
 import org.bson.types.ObjectId;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.core.io.Resource;
 import org.springframework.http.CacheControl;
@@ -32,11 +37,14 @@ import com.mongodb.client.gridfs.model.GridFSFile;
 
 @RestController
 @RequestMapping("/api")
-@CrossOrigin(origins = {"http://localhost:3000", "http://localhost:3001"})
+@CrossOrigin(origins = { "http://localhost:3000", "http://localhost:3001" })
 public class PostController {
     private static final Logger logger = Logger.getLogger(PostController.class.getName());
     private final PostService postService;
     private final GridFSBucket gridFSBucket;
+
+    @Value("${upload.directory}")
+    private String uploadDirectory;
 
     @Autowired
     public PostController(PostService postService, GridFSBucket gridFSBucket) {
@@ -115,24 +123,46 @@ public class PostController {
     public ResponseEntity<Resource> getMedia(@PathVariable String mediaId) {
         try {
             logger.info("Fetching media with ID: " + mediaId);
-            
+
+            // Check if file exists in local storage first
+            Path localFilePath = Paths.get("backend", "uploads", mediaId);
+            if (Files.exists(localFilePath)) {
+                logger.info("Found media in local storage: " + localFilePath);
+                byte[] data = Files.readAllBytes(localFilePath);
+                String contentType = determineContentType(localFilePath.getFileName().toString(), null);
+
+                HttpHeaders headers = new HttpHeaders();
+                headers.setContentType(MediaType.parseMediaType(contentType));
+                headers.setContentLength(data.length);
+                headers.setCacheControl(CacheControl.noCache().getHeaderValue());
+                headers.setPragma("no-cache");
+                headers.setExpires(0L);
+                headers.set(HttpHeaders.ACCEPT_RANGES, "bytes");
+
+                return ResponseEntity
+                        .status(HttpStatus.OK)
+                        .headers(headers)
+                        .body(new ByteArrayResource(data));
+            }
+
+            // If not in local storage, fallback to GridFS
             // Validate ObjectId format
             if (!ObjectId.isValid(mediaId)) {
                 logger.warning("Invalid media ID format: " + mediaId);
                 return ResponseEntity.badRequest().build();
             }
-            
+
             ObjectId objectId = new ObjectId(mediaId);
             GridFSFile file = gridFSBucket.find(new org.bson.Document("_id", objectId)).first();
-            
+
             if (file == null) {
                 logger.warning("Media not found with ID: " + mediaId);
                 return ResponseEntity.notFound().build();
             }
 
             try (GridFSDownloadStream downloadStream = gridFSBucket.openDownloadStream(objectId);
-                 ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
-                
+                    ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+
                 byte[] buffer = new byte[8192];
                 int bytesRead;
                 while ((bytesRead = downloadStream.read(buffer)) != -1) {
@@ -141,7 +171,7 @@ public class PostController {
                 byte[] data = outputStream.toByteArray();
 
                 String contentType = determineContentType(file.getFilename(), file.getMetadata());
-                
+
                 HttpHeaders headers = new HttpHeaders();
                 headers.setContentType(MediaType.parseMediaType(contentType));
                 headers.setContentLength(data.length);
@@ -149,12 +179,15 @@ public class PostController {
                 headers.setPragma("no-cache");
                 headers.setExpires(0L);
                 headers.set(HttpHeaders.ACCEPT_RANGES, "bytes");
-                
+
                 return ResponseEntity
-                    .status(HttpStatus.OK)
-                    .headers(headers)
-                    .body(new ByteArrayResource(data));
+                        .status(HttpStatus.OK)
+                        .headers(headers)
+                        .body(new ByteArrayResource(data));
             }
+        } catch (IOException e) {
+            logger.severe("Error reading file from local storage: " + e.getMessage());
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         } catch (IllegalArgumentException e) {
             logger.warning("Invalid media ID: " + e.getMessage());
             return ResponseEntity.badRequest().build();
@@ -170,7 +203,7 @@ public class PostController {
         if (metadata != null && metadata.containsKey("contentType")) {
             return metadata.getString("contentType");
         }
-        
+
         if (metadata != null && metadata.getString("type") != null) {
             switch (metadata.getString("type")) {
                 case "image":
